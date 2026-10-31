@@ -14,8 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Button
 import android.widget.TextView
-import androidx.core.location.LocationCompat
-import androidx.core.location.altitude.AltitudeConverterCompat
+import android.location.altitude.AltitudeConverter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -123,37 +122,36 @@ class MainActivity : Activity(), LocationListener {
     }
 
     override fun onLocationChanged(location: Location) {
-        // 換算成「海平面高度」(MSL)；需讀取內建大地水準面資料，放到背景執行緒
+        // Android 14 以上：用系統內建資料把 GPS 高度換算成「海平面高度」(MSL)
+        // 這需要讀取資料檔，放到背景執行緒
         worker.execute {
             val loc = Location(location)
-            try {
-                if (!LocationCompat.hasMslAltitude(loc) && loc.hasAltitude()) {
-                    AltitudeConverterCompat.addMslAltitudeToLocation(this, loc)
+            if (Build.VERSION.SDK_INT >= 34 && loc.hasAltitude() && !loc.hasMslAltitude()) {
+                try {
+                    AltitudeConverter().addMslAltitudeToLocation(this, loc)
+                } catch (_: Throwable) {
+                    // 換算失敗就退回 GPS 原始高度
                 }
-            } catch (_: Throwable) {
-                // 換算失敗就退回 GPS 原始高度
             }
             handler.post { showLocation(loc) }
         }
     }
 
     private fun showLocation(loc: Location) {
-        val msl = LocationCompat.hasMslAltitude(loc)
-        when {
-            msl -> {
-                altitudeText.text = String.format(Locale.US, "%.0f 公尺", LocationCompat.getMslAltitudeMeters(loc))
-                val acc = if (LocationCompat.hasMslAltitudeAccuracy(loc))
-                    LocationCompat.getMslAltitudeAccuracyMeters(loc) else LocationCompat.getVerticalAccuracyMeters(loc)
-                accuracyText.text = if (acc > 0) String.format(Locale.US, "誤差約 ±%.0f 公尺（海平面高度）", acc) else "海平面高度"
+        if (Build.VERSION.SDK_INT >= 34 && loc.hasMslAltitude()) {
+            altitudeText.text = String.format(Locale.US, "%.0f 公尺", loc.mslAltitudeMeters)
+            val acc = when {
+                loc.hasMslAltitudeAccuracy() -> loc.mslAltitudeAccuracyMeters
+                loc.hasVerticalAccuracy() -> loc.verticalAccuracyMeters
+                else -> 0f
             }
-            loc.hasAltitude() -> {
-                altitudeText.text = String.format(Locale.US, "%.0f 公尺", loc.altitude)
-                accuracyText.text = "GPS 橢球高（台灣地區約比實際海拔高 15–25 公尺）"
-            }
-            else -> {
-                altitudeText.text = "定位中…"
-                accuracyText.text = "尚未取得 GPS 高度"
-            }
+            accuracyText.text = if (acc > 0) String.format(Locale.US, "誤差約 ±%.0f 公尺（海平面高度）", acc) else "海平面高度"
+        } else if (loc.hasAltitude()) {
+            altitudeText.text = String.format(Locale.US, "%.0f 公尺", loc.altitude)
+            accuracyText.text = "GPS 橢球高（台灣地區約比實際海拔高 15–25 公尺）"
+        } else {
+            altitudeText.text = "定位中…"
+            accuracyText.text = "尚未取得 GPS 高度"
         }
         coordText.text = String.format(Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)
         statusText.text = "GPS 水平誤差約 ±${loc.accuracy.toInt()} 公尺"
